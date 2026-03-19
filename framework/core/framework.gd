@@ -28,7 +28,7 @@ func register_system(system : System) -> void:
 		push_error("Framework|System注册|%s已经注册，请勿重复注册" % system_name)
 		return
 	_system_dic[system_name] = system
-	
+
 
 func unregister_model(model_name : StringName) -> void:
 	_model_dic.erase(model_name)

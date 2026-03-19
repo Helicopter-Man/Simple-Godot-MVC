@@ -5,16 +5,16 @@ class_name FSM
 # 仅支持枚举，规矩越死，规范越硬
 
 @abstract
-class FSMState:
-	
+class FSMState extends RefCounted:
+
 	@abstract
-	func enter()
-	
+	func enter() -> void
+
 	@abstract
-	func update(delta : float)
-	
+	func update(delta : float) -> void
+
 	@abstract
-	func eixt()
+	func eixt() -> void
 
 var _states : Dictionary[int,FSMState] = {}
 var _current_state : FSMState = null
@@ -34,7 +34,7 @@ func add_state(index : int, state : FSMState) -> void:
 
 func start(index : int = 0) -> void:
 	change_state(index)
-	
+
 func change_state(index : int) -> void:
 	if !_states.has(index):
 		push_error("FSMKit|切换状态|不存在状态索引%s" % index)
@@ -42,10 +42,10 @@ func change_state(index : int) -> void:
 	if !_states[index]:
 		push_error("FSMKit|切换状态|状态为空")
 		return
-	
+
 	if _current_state != null:
 		_current_state.eixt()
-	
+
 	_current_state = _states[index]
 	_current_state.enter()
 

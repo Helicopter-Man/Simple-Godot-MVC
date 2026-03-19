@@ -3,7 +3,7 @@ extends Resource
 class_name Model
 
 func get_script_name()->StringName:
-	return (get_script() as GDScript).get_global_name()
+    return (get_script() as GDScript).get_global_name()
 
 func get_utility(utility_name : StringName)->Object:
-	return Framework.get_utility(utility_name)
+    return Framework.get_utility(utility_name)
