@@ -5,6 +5,9 @@ class_name System
 func get_script_name() -> StringName:
 	return (get_script() as GDScript).get_global_name()
 
+func get_system(system_name : StringName) -> System:
+	return Framework.get_system(system_name)
+
 func get_model(model_name : StringName) -> Model:
 	return Framework.get_model(model_name)
 
