@@ -14,7 +14,7 @@ class FSMState extends RefCounted:
 	func update(delta : float) -> void
 
 	@abstract
-	func eixt() -> void
+	func exit() -> void
 
 var _states : Dictionary[int,FSMState] = {}
 var _current_state : FSMState = null
@@ -44,7 +44,7 @@ func change_state(index : int) -> void:
 		return
 
 	if _current_state != null:
-		_current_state.eixt()
+		_current_state.exit()
 
 	_current_state = _states[index]
 	_current_state.enter()
