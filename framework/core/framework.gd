@@ -37,7 +37,7 @@ func unregister_utility(utility_name : StringName) -> void:
 	_utility_dic.erase(utility_name)
 
 func unregister_system(system_name : StringName) -> void:
-	_model_dic.erase(system_name)
+	_system_dic.erase(system_name)
 
 func get_model(model_name : StringName) -> Model:
 	return _model_dic.get(model_name)
