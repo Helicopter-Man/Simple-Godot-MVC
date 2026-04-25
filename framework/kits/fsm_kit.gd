@@ -22,7 +22,7 @@ class FSMState extends RefCounted:
 		if !fsm.get_meta(FSM_FLAG,false):
 			push_error("FSMKit|状态初始化|传入的fsm对象并非状态机")
 			return
-		name = name
+		name = _name
 		_fsm_ref = weakref(fsm)
 
 	func _change_state(_name : StringName) -> void:
