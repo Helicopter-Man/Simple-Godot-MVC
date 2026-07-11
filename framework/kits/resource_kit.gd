@@ -1,9 +1,9 @@
-extends Resource
+extends Utility
 ## 一个简单的存储特定的Resource到特定位置的工具
 class_name ResourceKit
 
 ## 保存资源
-static func resource_save(resource : Resource,save_path : String) -> void:
+func resource_save(resource : Resource,save_path : String) -> void:
 	# 确保路径使用 user:// 目录
 	if not save_path.begins_with("user://"):
 		push_error("ResourceKit|资源保存|路径非法，确保路径使用 user:// 目录")
@@ -19,7 +19,7 @@ static func resource_save(resource : Resource,save_path : String) -> void:
 	ResourceSaver.save(resource,save_path)
 
 ## 读取资源
-static func resource_load(save_path : String) -> Resource:
+func resource_load(save_path : String) -> Resource:
 	# 确保路径使用 user:// 目录
 	if not save_path.begins_with("user://"):
 		push_error("ResourceKit|资源读取|路径非法，确保路径使用 user:// 目录")
@@ -46,7 +46,7 @@ static func resource_load(save_path : String) -> Resource:
 	return resource
 
 ## 确保路径存在
-static func _ensure_folder_exists(save_path : String) -> void:
+func _ensure_folder_exists(save_path : String) -> void:
 	var dir = DirAccess.open("user://")
 	var dir_path = save_path.get_base_dir().replace("user://", "")
 	for part in dir_path.split("/"):
