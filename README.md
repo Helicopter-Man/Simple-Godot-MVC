@@ -18,6 +18,7 @@
 - [Kit 扩展](#kit-扩展)
   - [FSM](#fsm)
   - [ResourceKit](#resourcekit)
+  - [SaveKit](#savekit)
 - [安装](#安装)
 - [快速开始](#快速开始)
 - [详细使用指南](#详细使用指南)
@@ -28,6 +29,7 @@
   - [5. 定义与发送 Event](#5-定义与发送-event)
   - [6. 使用 FSM](#6-使用-fsm)
   - [7. 持久化数据](#7-持久化数据)
+  - [8. 使用 SaveKit 存档（版本迁移）](#8-使用-savekit-存档版本迁移)
 - [分层依赖规则](#分层依赖规则)
 - [生命周期](#生命周期)
 - [最佳实践](#最佳实践)
@@ -147,6 +149,62 @@
 - `resource_save(resource, path)`：保存到 `user://` 下的 `.tres` 文件。
 - `resource_load(path)`：读取并 **深拷贝** 返回，避免直接修改源资源。
 - 自动创建所需目录。
+
+### SaveKit
+
+[framework/kits/save_kit.gd](framework/kits/save_kit.gd)
+
+继承自 `Architecture`，作为专用的 **存档作用域容器**。与一般 Architecture 不同，SaveKit 仅承载 saveable Model，不接受 System / Utility，避免存档域与业务域耦合。
+
+- **注册约束**：
+  - `register_model(model)` 仅接受实现了 `get_data` / `set_data` 接口的 Model，否则 `push_error` 并拒绝。
+  - `register_system` / `register_utility` 一律拒绝并 `push_error`（存档域无需业务逻辑）。
+
+- **saveable Model 契约**：
+
+  | 方法 | 必填 | 说明 |
+  |------|------|------|
+  | `get_data() -> Dictionary` | 是 | 返回需要持久化的字段，仅含 Godot 基础类型 |
+  | `set_data(data: Dictionary)` | 是 | 从字典恢复字段 |
+  | `get_version() -> int` | 否 | 返回当前数据版本号，未实现时默认 1 |
+  | `migrate(data, from_version) -> Dictionary` | 否 | 版本迁移钩子，逐版本向上迁移 |
+  | `get_defaults() -> Dictionary` | 否 | 返回默认值字典，用于补齐老存档缺失字段 |
+
+- **存档信封结构**：
+
+  ```gdscript
+  {
+      "save_version": 1,                     # 信封格式版本
+      "saved_at": "2026-07-11 12:34:56",     # 保存时间（系统本地时间）
+      "models": {
+          "PlayerSaveModel": {
+              "version": 2,                  # 该 Model 的数据版本
+              "data": { ... }                # get_data() 返回的内容
+          },
+          # ...
+      }
+  }
+  ```
+
+- **序列化方式**：使用 `var2bytes` / `bytes2var` 进行二进制序列化，相比 `.tres` 文本格式更紧凑且支持任意 Dictionary 嵌套。
+
+- **读档流程**：
+  1. 反序列化信封，遍历 `models` 字典。
+  2. 按条目名查找当前已注册的 Model（未注册则跳过并 `push_warning`）。
+  3. 执行 **版本迁移链**：若存档版本 < 当前版本且 Model 实现了 `migrate`，则逐版本向上迁移；未实现则 `push_warning` 并中断迁移。
+  4. **默认值填充**：若 Model 实现了 `get_defaults`，对 `data` 中缺失的键补默认值。
+  5. 调用 `model.set_data(data)` 写回字段。
+
+- **优雅降级**：
+  - 旧 Model 已被移除（存档有、当前未注册）：跳过并 `push_warning`。
+  - 新 Model 是新增的（当前已注册、存档没有）：保持初始值不变。
+  - 存档版本超前于代码版本：`push_warning` 并原样使用数据，不回滚。
+
+- **辅助方法**：
+  - `has_save(path) -> bool`：判断存档文件是否存在。
+  - `get_save_info(path) -> Dictionary`：读取存档元信息（`save_version` / `saved_at` / `models` 名列表），不触发 `set_data`，适合在选档界面预览。
+
+- **路径安全**：所有读写入口强制 `user://` 前缀，防止误写工程目录。
 
 ---
 
@@ -445,6 +503,136 @@ if loaded:
 ```
 
 > `ResourceKit` 强制使用 `user://` 目录与 `.tres` 后缀，避免误写工程目录。读取时会返回深拷贝，修改不会影响磁盘文件。
+
+### 8. 使用 SaveKit 存档（版本迁移）
+
+`SaveKit` 适合多 Model 的整体存档场景，并内置版本迁移链。下面给出完整用法。
+
+#### 8.1 定义 saveable Model
+
+```gdscript
+# player_save_model.gd
+extends Model
+class_name PlayerSaveModel
+
+var hp: int = 100
+var max_hp: int = 100
+var level: int = 1
+
+# ---- saveable 契约 ----
+func get_data() -> Dictionary:
+    return {
+        "hp": hp,
+        "max_hp": max_hp,
+        "level": level,
+    }
+
+func set_data(data: Dictionary) -> void:
+    hp = data.get("hp", hp)
+    max_hp = data.get("max_hp", max_hp)
+    level = data.get("level", level)
+
+# ---- 版本管理（可选）----
+func get_version() -> int:
+    return 2  # 当前数据版本
+
+func migrate(data: Dictionary, from_version: int) -> Dictionary:
+    match from_version:
+        1:
+            # v1 → v2：将 exp 字段重命名为 level
+            data["level"] = data.get("exp", 1)
+            data.erase("exp")
+    return data
+
+func get_defaults() -> Dictionary:
+    return {
+        "hp": 100,
+        "max_hp": 100,
+        "level": 1,
+    }
+```
+
+#### 8.2 创建 SaveKit 子类
+
+```gdscript
+# game_save_kit.gd
+extends SaveKit
+class_name GameSaveKit
+
+func _init_architecture() -> void:
+    register_model(PlayerSaveModel.new())
+    register_model(InventorySaveModel.new())
+    register_model(WorldStateSaveModel.new())
+```
+
+#### 8.3 在主 Architecture 中集成
+
+```gdscript
+# game_architecture.gd
+extends Architecture
+class_name GameArchitecture
+
+var save_kit: GameSaveKit
+
+func _init_architecture() -> void:
+    # 创建存档作用域并加入场景树（触发 _ready）
+    save_kit = GameSaveKit.new()
+    add_child(save_kit)
+
+    # 注册业务 System / Utility
+    register_system(CombatSystem.new())
+    register_utility(ResourceKit.new())
+
+func get_save_kit() -> SaveKit:
+    return save_kit
+```
+
+#### 8.4 在 System 中存读档
+
+```gdscript
+# save_system.gd
+extends System
+class_name SaveSystem
+
+const SAVE_PATH := "user://saves/slot_1.save"
+
+func save_game() -> void:
+    var sk := get_architecture().get_save_kit()
+    sk.save(SAVE_PATH)
+
+func load_game() -> void:
+    var sk := get_architecture().get_save_kit()
+    if sk.has_save(SAVE_PATH):
+        sk.load(SAVE_PATH)
+    else:
+        push_warning("无存档")
+
+func get_save_meta() -> Dictionary:
+    var sk := get_architecture().get_save_kit()
+    return sk.get_save_info(SAVE_PATH)
+    # 返回 { save_version, saved_at, models: [...] }
+```
+
+#### 8.5 在 System 中访问 saveable Model
+
+```gdscript
+# combat_system.gd
+extends System
+class_name CombatSystem
+
+func deal_damage(amount: int) -> void:
+    var sk := get_architecture().get_save_kit()
+    var player := sk.get_model(&"PlayerSaveModel") as PlayerSaveModel
+    player.hp = max(player.hp - amount, 0)
+```
+
+#### 8.6 重要说明
+
+- saveable Model 应为 **纯数据**，不依赖主 Architecture 的 System / Utility / Event（因为 saveable Model 的 `_architecture` 指向的是 SaveKit，而非主 Architecture）。
+- `get_data()` 返回的 Dictionary 应仅含 Godot 基础类型（`int` / `float` / `String` / `bool` / `Array` / `Dictionary` / `Vector2` 等），避免 `Resource` / `Object` 引用——`var2bytes` 虽然能序列化部分对象，但跨版本/跨脚本恢复时容易失效。
+- `SaveKit` 与 `ResourceKit` 并存：`ResourceKit` 适合单个 `Resource` 的灵活存取（如配置、单档数据），`SaveKit` 适合多 Model 的版本化整体存档（如 RPG 多表存档、版本迁移）。
+- 存档路径强制 `user://` 前缀，防止误写工程目录；建议在子目录下按槽位命名（如 `user://saves/slot_1.save`）。
+- `SaveKit` 需通过 `add_child` 加入场景树才会触发 `_ready` → `_init_architecture` → 各 Model 的 `_on_init`，切勿仅持有引用而不挂载。
 
 ---
 
