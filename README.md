@@ -186,7 +186,7 @@
   }
   ```
 
-- **序列化方式**：使用 `var2bytes` / `bytes2var` 进行二进制序列化，相比 `.tres` 文本格式更紧凑且支持任意 Dictionary 嵌套。
+- **序列化方式**：使用 `var_to_bytes` / `bytes_to_var` 进行二进制序列化，相比 `.tres` 文本格式更紧凑且支持任意 Dictionary 嵌套。
 
 - **读档流程**：
   1. 反序列化信封，遍历 `models` 字典。
@@ -629,7 +629,7 @@ func deal_damage(amount: int) -> void:
 #### 8.6 重要说明
 
 - saveable Model 应为 **纯数据**，不依赖主 Architecture 的 System / Utility / Event（因为 saveable Model 的 `_architecture` 指向的是 SaveKit，而非主 Architecture）。
-- `get_data()` 返回的 Dictionary 应仅含 Godot 基础类型（`int` / `float` / `String` / `bool` / `Array` / `Dictionary` / `Vector2` 等），避免 `Resource` / `Object` 引用——`var2bytes` 虽然能序列化部分对象，但跨版本/跨脚本恢复时容易失效。
+- `get_data()` 返回的 Dictionary 应仅含 Godot 基础类型（`int` / `float` / `String` / `bool` / `Array` / `Dictionary` / `Vector2` 等），避免 `Resource` / `Object` 引用——`var_to_bytes` 虽然能序列化部分对象，但跨版本/跨脚本恢复时容易失效。
 - `SaveKit` 与 `ResourceKit` 并存：`ResourceKit` 适合单个 `Resource` 的灵活存取（如配置、单档数据），`SaveKit` 适合多 Model 的版本化整体存档（如 RPG 多表存档、版本迁移）。
 - 存档路径强制 `user://` 前缀，防止误写工程目录；建议在子目录下按槽位命名（如 `user://saves/slot_1.save`）。
 - `SaveKit` 需通过 `add_child` 加入场景树才会触发 `_ready` → `_init_architecture` → 各 Model 的 `_on_init`，切勿仅持有引用而不挂载。
