@@ -15,6 +15,8 @@
   - [System](#system)
   - [Utility](#utility)
   - [Event](#event)
+  - [ServiceMiddleware](#servicemiddleware)
+  - [ServiceConfig](#serviceconfig)
 - [Kit 扩展](#kit-扩展)
   - [FSM](#fsm)
   - [ResourceKit](#resourcekit)
@@ -30,6 +32,7 @@
   - [6. 使用 FSM](#6-使用-fsm)
   - [7. 持久化数据](#7-持久化数据)
   - [8. 使用 SaveKit 存档（版本迁移）](#8-使用-savekit-存档版本迁移)
+  - [9. 使用 ServiceMiddleware 跨 Architecture 通信](#9-使用-servicemiddleware-跨-architecture-通信)
 - [分层依赖规则](#分层依赖规则)
 - [生命周期](#生命周期)
 - [最佳实践](#最佳实践)
@@ -42,34 +45,36 @@
 ## 架构总览
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│                      Architecture                          │
-│              （作用域 IoC 容器 / 事件总线）                │
-│                                                            │
-│   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   │
-│   │   Model(s)   │   │  System(s)   │   │ Utility(s)   │   │
-│   │  数据层      │◀──│  逻辑层      │──▶│  基础设施层  │   │
-│   │ extends      │   │ extends      │   │ extends      │   │
-│   │  Resource    │   │  RefCounted  │   │  RefCounted  │   │
-│   └──────────────┘   └──────────────┘   └──────────────┘   │
-│           ▲                   ▲                   ▲         │
-│           └─────────── Event Bus（线程安全）────────┘         │
-│                                                            │
-│   可选 Kit：FSM（状态机） / ResourceKit（资源存取）          │
-└────────────────────────────────────────────────────────────┘
-            ▲                                       ▲
-            │                                       │
-        Godot 场景树                            View 层
-       （Node / Scene / UI）              （由业务自行组织）
+┌──────────────────────────────────────────────────────────────┐
+│                    ServiceMiddleware                         │
+│            （静态服务注册表，全局查询枢纽）                   │
+│                                                              │
+│    register_service / get_service / has_service              │
+└──────────────────────────────────────────────────────────────┘
+    ▲                    ▲                    ▲
+    │ 注册服务           │ 注册服务           │ 注册服务
+    │                    │                    │
+┌───┴────────────┐ ┌────┴───────────┐ ┌──────┴─────────┐
+│ MainArchitecture│ │   SaveKit      │ │ OtherArch      │
+│  （平行）       │ │   （平行）     │ │  （平行）       │
+│                │ │                │ │                │
+│ ┌────────────┐ │ │ ┌────────────┐ │ │ ┌────────────┐ │
+│ │  Systems   │ │ │ │ saveable   │ │ │ │   ...      │ │
+│ │  Models    │ │ │ │  Models    │ │ │ │            │ │
+│ │  Utilities │ │ │ │            │ │ │ │            │ │
+│ └────────────┘ │ │ └────────────┘ │ │ └────────────┘ │
+│ service_config │ │ service_config │ │ service_config │
+└────────────────┘ └────────────────┘ └────────────────┘
 ```
 
 **设计要点：**
 
-1. **作用域化**：`Architecture` 继承自 `Node`，可作为场景节点挂载，多个 Architecture 实例可并存（适合分场景 / 子模块隔离）。
+1. **平行 Architecture**：`Architecture` 继承自 `Node`，可作为场景节点挂载，多个 Architecture 实例平级并存（适合分场景 / 子模块隔离），不再相互嵌套。
 2. **分层清晰**：Model 只承载数据，System 承载逻辑，Utility 提供基础设施，依赖方向单一。
 3. **事件总线内置**：无需额外 Autoload，事件按 Architecture 作用域分发，并使用 `Mutex` 保证线程安全。
 4. **按需 tick**：System 通过定义 `on_process` / `on_physics_process` 方法 opt-in 逐帧更新，未定义的 System 不会进入轮询列表。
 5. **Kit 化扩展**：FSM、ResourceKit 等以可选 Kit 形式提供，核心保持精简。
+6. **中间件解耦**：每个 Architecture 通过 ServiceConfig 声明对外接口，初始化时自动注册到 ServiceMiddleware。其他 Architecture 的 System/Model 通过 `get_service()` 查询中间件，不直接依赖提供方。Architecture 之间是平行的，不再嵌套。
 
 ---
 
@@ -124,6 +129,38 @@
 - **使用方式**：业务自定义子类（携带任意字段），以类的 `global_name` 作为事件类型键。
 - **派发**：调用 `architecture.send_event(event)` 或 `model/system.send_event(event)`。
 - **线程安全**：内部使用 `Mutex` 保护回调列表。
+
+### ServiceMiddleware
+
+[framework/core/service_middleware.gd](framework/core/service_middleware.gd)
+
+- **角色**：纯静态服务注册表，平行 Architecture 之间的解耦通信枢纽。
+- **特点**：无需实例化，全部方法为 `static`；无需 Autoload，通过 `ServiceMiddleware.方法名()` 直接调用。
+- **API**：
+  - `register_service(name: StringName, service: Variant)`：注册服务，重复注册时 `push_warning` 提示覆盖。
+  - `get_service(name: StringName) -> Variant`：查询服务，不存在返回 `null`。
+  - `has_service(name: StringName) -> bool`：判断服务是否存在。
+  - `unregister_service(name: StringName)`：注销服务。
+  - `clear()`：清空所有服务（测试/重置用）。
+- **使用方式**：Architecture 在 `_ready()` 末尾自动将 ServiceConfig 声明的服务注册到此处；System/Model 通过 `get_service(&"服务名")` 查询。
+
+### ServiceConfig
+
+[framework/core/service_config.gd](framework/core/service_config.gd)
+
+- **角色**：声明式配置文件（Resource），定义 Architecture 的对外接口。
+- **使用方式**：在编辑器中创建 `ServiceConfig` 类型的 `.tres` 资源，填入要暴露的组件名称，赋值给 Architecture 节点的 `service_config` 属性。
+- **字段**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `models` | `Array[StringName]` | 暴露为服务的 Model 名称列表 |
+| `systems` | `Array[StringName]` | 暴露为服务的 System 名称列表 |
+| `utilities` | `Array[StringName]` | 暴露为服务的 Utility 名称列表 |
+| `self_name` | `StringName` | 将 Architecture 自身作为服务暴露的名称（空则不暴露） |
+
+- **自动注册**：Architecture 在 `_ready()` 完成所有组件初始化后，自动读取 `service_config` 并将声明的服务注册到 `ServiceMiddleware`。
+- **自动注销**：Architecture 在 `deinit()` 时自动注销所有已注册的服务。
 
 ---
 
@@ -572,19 +609,25 @@ func _init_architecture() -> void:
 extends Architecture
 class_name GameArchitecture
 
-var save_kit: GameSaveKit
-
 func _init_architecture() -> void:
-    # 创建存档作用域并加入场景树（触发 _ready）
-    save_kit = GameSaveKit.new()
-    add_child(save_kit)
-
     # 注册业务 System / Utility
     register_system(CombatSystem.new())
+    register_system(SaveSystem.new())
     register_utility(ResourceKit.new())
 
-func get_save_kit() -> SaveKit:
-    return save_kit
+# NOTE SaveKit 不再嵌套于主 Architecture 内，而是作为平行节点存在于场景树中
+# 在场景编辑器中将 SaveKit 节点与 MainArchitecture 节点设为兄弟节点：
+#   GameRoot (Node)
+#   ├── MainArchitecture  (service_config: MainServiceConfig.tres)
+#   └── SaveKit           (service_config: SaveServiceConfig.tres)
+```
+
+同时补充说明：创建 SaveKit 的 ServiceConfig（`.tres` 文件）：
+
+```gdscript
+# SaveServiceConfig.tres 的配置（在编辑器 Inspector 中设置）：
+# models: ["PlayerSaveModel", "InventorySaveModel", "WorldStateSaveModel"]
+# self_name: "SaveKit"
 ```
 
 #### 8.4 在 System 中存读档
@@ -597,18 +640,18 @@ class_name SaveSystem
 const SAVE_PATH := "user://saves/slot_1.save"
 
 func save_game() -> void:
-    var sk := get_architecture().get_save_kit()
+    var sk := get_service(&"SaveKit") as SaveKit
     sk.save(SAVE_PATH)
 
 func load_game() -> void:
-    var sk := get_architecture().get_save_kit()
+    var sk := get_service(&"SaveKit") as SaveKit
     if sk.has_save(SAVE_PATH):
         sk.load(SAVE_PATH)
     else:
         push_warning("无存档")
 
 func get_save_meta() -> Dictionary:
-    var sk := get_architecture().get_save_kit()
+    var sk := get_service(&"SaveKit") as SaveKit
     return sk.get_save_info(SAVE_PATH)
     # 返回 { save_version, saved_at, models: [...] }
 ```
@@ -621,8 +664,8 @@ extends System
 class_name CombatSystem
 
 func deal_damage(amount: int) -> void:
-    var sk := get_architecture().get_save_kit()
-    var player := sk.get_model(&"PlayerSaveModel") as PlayerSaveModel
+    # NOTE 通过中间件查询，不直接依赖 SaveKit
+    var player := get_service(&"PlayerSaveModel") as PlayerSaveModel
     player.hp = max(player.hp - amount, 0)
 ```
 
@@ -632,7 +675,73 @@ func deal_damage(amount: int) -> void:
 - `get_data()` 返回的 Dictionary 应仅含 Godot 基础类型（`int` / `float` / `String` / `bool` / `Array` / `Dictionary` / `Vector2` 等），避免 `Resource` / `Object` 引用——`var_to_bytes` 虽然能序列化部分对象，但跨版本/跨脚本恢复时容易失效。
 - `SaveKit` 与 `ResourceKit` 并存：`ResourceKit` 适合单个 `Resource` 的灵活存取（如配置、单档数据），`SaveKit` 适合多 Model 的版本化整体存档（如 RPG 多表存档、版本迁移）。
 - 存档路径强制 `user://` 前缀，防止误写工程目录；建议在子目录下按槽位命名（如 `user://saves/slot_1.save`）。
-- `SaveKit` 需通过 `add_child` 加入场景树才会触发 `_ready` → `_init_architecture` → 各 Model 的 `_on_init`，切勿仅持有引用而不挂载。
+- SaveKit 作为平行 Architecture 节点存在于场景树中，通过 ServiceConfig 声明对外接口（saveable Models + 自身实例），其他 Architecture 的 System 经由 `get_service()` 查询，不直接依赖。
+
+### 9. 使用 ServiceMiddleware 跨 Architecture 通信
+
+ServiceMiddleware 提供了平行 Architecture 之间的解耦通信能力。下面演示完整流程。
+
+#### 9.1 创建 ServiceConfig
+
+在编辑器中创建 `ServiceConfig` 资源：
+
+1. FileSystem → 右键 → New Resource → 选择 `ServiceConfig`
+2. 在 Inspector 中填写要暴露的组件名称
+3. 保存为 `.tres` 文件（如 `res://configs/save_service_config.tres`）
+
+也可以通过代码创建：
+
+```gdscript
+var config = ServiceConfig.new()
+config.models = [&"PlayerSaveModel", &"InventorySaveModel"]
+config.self_name = &"SaveKit"
+ResourceSaver.save(config, "res://configs/save_service_config.tres")
+```
+
+#### 9.2 场景结构：平行 Architecture
+
+```
+GameRoot (Node)
+├── MainArchitecture       (service_config: MainServiceConfig.tres)
+├── SaveKit                (service_config: SaveServiceConfig.tres)
+└── NetworkArchitecture    (service_config: NetworkServiceConfig.tres)
+```
+
+每个 Architecture 节点在 Inspector 中将对应的 ServiceConfig 资源赋值给 `service_config` 属性。
+
+#### 9.3 声明对外接口
+
+SaveKit 的 ServiceConfig：
+- `models`: `[&"PlayerSaveModel", &"InventorySaveModel"]`
+- `self_name`: `&"SaveKit"`（暴露 SaveKit 实例自身，供 System 调用 save/load）
+
+MainArchitecture 的 ServiceConfig：
+- `systems`: `[&"CombatSystem"]`（暴露 CombatSystem 供其他 Architecture 调用）
+- `utilities`: `[&"ResourceKit"]`
+
+#### 9.4 通过中间件查询服务
+
+在任意 System / Model 中：
+
+```gdscript
+# 查询 saveable Model（由 SaveKit 提供）
+var player := get_service(&"PlayerSaveModel") as PlayerSaveModel
+
+# 查询 SaveKit 实例本身（用于调用 save/load）
+var save_kit := get_service(&"SaveKit") as SaveKit
+save_kit.save("user://saves/slot_1.save")
+
+# 查询其他 Architecture 暴露的 System
+var combat := get_service(&"CombatSystem") as CombatSystem
+```
+
+#### 9.5 重要说明
+
+- 服务在 Architecture 的 `_ready()` 完成后才注册到中间件。不要在 `_on_init()` 中查询其他 Architecture 的服务（可能尚未注册），应在运行时按需查询。
+- `get_service()` 返回 `Variant`，调用方需自行 `as` 转型并判空。
+- Architecture 在 `deinit()` 时自动注销其注册的所有服务，无需手动清理。
+- `ServiceMiddleware.clear()` 可清空所有服务，主要用于测试场景重置。
+- 重复注册同一服务名会 `push_warning` 提示覆盖，新值替换旧值。
 
 ---
 

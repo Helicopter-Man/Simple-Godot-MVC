@@ -18,6 +18,11 @@ var _event_mutex = Mutex.new()
 
 var _initialized : bool = false
 
+# NOTE 服务配置：声明本 Architecture 对外暴露的接口，赋值后在 _ready 时自动注册到 ServiceMiddleware
+@export var service_config : ServiceConfig
+# NOTE 跟踪本 Architecture 注册的服务名，用于 deinit 时注销
+var _registered_services : Array[StringName] = []
+
 # 生命周期：子类重写以注册自身的 Model/System/Utility
 func _init_architecture() -> void:
 	pass
@@ -30,6 +35,50 @@ func _ready() -> void:
 	for model : Model in _model_dic.values():
 		model._on_init()
 	_initialized = true
+	_register_services()
+
+
+# ---- 服务声明 ----
+func _register_services() -> void:
+	if service_config == null:
+		return
+	# NOTE 暴露 Architecture 自身
+	if service_config.self_name != &"":
+		ServiceMiddleware.register_service(service_config.self_name, self)
+		_registered_services.append(service_config.self_name)
+	# NOTE 暴露 Model
+	for model_name : StringName in service_config.models:
+		var model : Model = get_model(model_name)
+		if model != null:
+			ServiceMiddleware.register_service(model_name, model)
+			_registered_services.append(model_name)
+		else:
+			push_warning("Architecture|服务声明|Model %s 未注册，跳过" % model_name)
+	# NOTE 暴露 System
+	for system_name : StringName in service_config.systems:
+		var system : System = get_system(system_name)
+		if system != null:
+			ServiceMiddleware.register_service(system_name, system)
+			_registered_services.append(system_name)
+		else:
+			push_warning("Architecture|服务声明|System %s 未注册，跳过" % system_name)
+	# NOTE 暴露 Utility
+	for utility_name : StringName in service_config.utilities:
+		var utility : Utility = get_utility(utility_name)
+		if utility != null:
+			ServiceMiddleware.register_service(utility_name, utility)
+			_registered_services.append(utility_name)
+		else:
+			push_warning("Architecture|服务声明|Utility %s 未注册，跳过" % utility_name)
+
+func _unregister_services() -> void:
+	for service_name : StringName in _registered_services:
+		ServiceMiddleware.unregister_service(service_name)
+	_registered_services.clear()
+
+# NOTE 查询其他 Architecture 暴露的服务
+func get_service(name : StringName) -> Variant:
+	return ServiceMiddleware.get_service(name)
 
 
 # ---- 注册 / 注销 / 获取 ----
@@ -149,6 +198,7 @@ func send_event(event: Event) -> void:
 
 # ---- 反初始化 ----
 func deinit() -> void:
+	_unregister_services()
 	for system : System in _system_dic.values():
 		system._on_deinit()
 	for model : Model in _model_dic.values():
