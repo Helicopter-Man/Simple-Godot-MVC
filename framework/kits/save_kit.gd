@@ -61,8 +61,8 @@ func _unregister_services() -> void:
 	_registered_services.clear()
 
 # NOTE 查询其他 Architecture 暴露的服务
-func get_service(name : StringName) -> Variant:
-	return ServiceMiddleware.get_service(name)
+func get_service(_name : StringName) -> Variant:
+	return ServiceMiddleware.get_service(_name)
 
 
 # ---- 注册 / 注销 / 获取 saveable Model ----
@@ -232,15 +232,14 @@ func load(path : String) -> void:
 
 
 # ---- 内部安全调用 ----
-# NOTE 包裹 migrate 调用，捕获运行时异常与返回值类型错误
+# NOTE GDScript 不支持 try/except，统一通过 has_method 做能力探测后再调用
+# 包裹 migrate 调用，校验返回值类型
 # 返回 null 表示失败；返回 Dictionary 表示成功
 func _safe_migrate(model : Model, data : Dictionary, from_version : int, model_name : StringName) -> Variant:
-	var migrated
-	try:
-		migrated = model.migrate(data, from_version)
-	except e:
-		push_error("SaveKit|读档|Model %s 的 migrate 抛出异常：%s" % [model_name, str(e)])
+	if not model.has_method("migrate"):
+		push_warning("SaveKit|读档|Model %s 未实现 migrate" % model_name)
 		return null
+	var migrated : Variant = model.migrate(data, from_version)
 	if not migrated is Dictionary:
 		push_error("SaveKit|读档|Model %s 的 migrate 未返回 Dictionary" % model_name)
 		return null
@@ -250,26 +249,20 @@ func _safe_migrate(model : Model, data : Dictionary, from_version : int, model_n
 func _safe_get_defaults(model : Model, model_name : StringName) -> Variant:
 	if not model.has_method("get_defaults"):
 		return null
-	var defaults
-	try:
-		defaults = model.get_defaults()
-	except e:
-		push_error("SaveKit|读档|Model %s 的 get_defaults 抛出异常：%s" % [model_name, str(e)])
-		return null
+	var defaults : Variant = model.get_defaults()
 	if not defaults is Dictionary:
 		push_warning("SaveKit|读档|Model %s 的 get_defaults 未返回 Dictionary" % model_name)
 		return null
 	return defaults.duplicate(true)
 
-# NOTE 包裹 set_data 调用，捕获业务侧运行时异常
-# 返回 true 表示成功，false 表示失败
+# NOTE 包裹 set_data 调用
+# 返回 true 表示成功，false 表示未实现
 func _safe_set_data(model : Model, data : Dictionary, model_name : StringName) -> bool:
-	try:
-		model.set_data(data)
-		return true
-	except e:
-		push_error("SaveKit|读档|Model %s 的 set_data 抛出异常：%s" % [model_name, str(e)])
+	if not model.has_method("set_data"):
+		push_error("SaveKit|读档|Model %s 未实现 set_data" % model_name)
 		return false
+	model.set_data(data)
+	return true
 
 
 # ---- 校验工具 ----
