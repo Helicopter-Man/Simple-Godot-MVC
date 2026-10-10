@@ -12,6 +12,7 @@ extends SceneTree
 
 const SUITES : Array = [
 	preload("res://tests/save_kit_test.gd"),
+	preload("res://tests/ui_kit_test.gd"),
 ]
 
 

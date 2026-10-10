@@ -1,6 +1,6 @@
 # 测试规范 framework tests
 
-本目录是框架的自动化测试。**此前没有测试规范**，本文件即第一版约定；`SaveKit` 是首个被测模块（36 个用例全绿）。
+本目录是框架的自动化测试。**此前没有测试规范**，本文件即第一版约定；`SaveKit` 是首个被测模块（36 个用例），`UiKit` 为第二个（49 个用例），均全绿。
 
 测试不依赖任何第三方测试框架，只用 Godot 自带的 GDScript + headless 运行。
 
@@ -13,13 +13,16 @@ tests/
 ├── README.md            # 本规范
 ├── run_tests.gd         # 入口：汇总所有套件、打印报告、设置退出码
 ├── save_kit_test.gd     # SaveKit 测试套件
+├── ui_kit_test.gd       # UiKit 测试套件
 ├── _report.json         # 运行时产物（勿提交）
 └── fixtures/            # 测试夹具（Model / Kit 子类等）
-    ├── test_save_model.gd
-    ├── plain_test_model.gd
-    ├── versioned_test_model.gd
-    ├── lifecycle_test_model.gd
-    └── test_save_kit.gd
+	├── test_save_model.gd
+	├── plain_test_model.gd
+	├── versioned_test_model.gd
+	├── lifecycle_test_model.gd
+	├── test_save_kit.gd
+	├── test_ui_view.gd
+	└── test_ui_event.gd
 ```
 
 ---
@@ -62,10 +65,10 @@ static func run(root : Node) -> Dictionary
 
 ```gdscript
 {
-    "suite":  String,   # 套件名
-    "total":  int,      # 用例总数
-    "failed": int,      # 失败数
-    "cases":  Array,    # [{"name": String, "ok": bool, "detail": String}]
+	"suite":  String,   # 套件名
+	"total":  int,      # 用例总数
+	"failed": int,      # 失败数
+	"cases":  Array,    # [{"name": String, "ok": bool, "detail": String}]
 }
 ```
 
@@ -79,7 +82,7 @@ static func run(root : Node) -> Dictionary
 
 ```gdscript
 static func _check(cases : Array, name : String, ok : bool, detail : String = "") -> void:
-    cases.append({"name": name, "ok": ok, "detail": detail})
+	cases.append({"name": name, "ok": ok, "detail": detail})
 ```
 
 断言直接对**错误码**与**返回值**做判断——这正是核心层「可失败操作返回 `Error`」带来的可测性：

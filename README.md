@@ -15,6 +15,7 @@
 - **事件总线内置**：无需额外 Autoload，事件按 Architecture 作用域分发，`Mutex` 保证线程安全。
 - **按需 tick**：System 只有定义了 `on_process` / `on_physics_process` 才会被纳入轮询；没有轮询对象时自动关闭 `_process` / `_physics_process`。
 - **扩展二分类**：容器型（`Kit`）与库型（`Lib`）两类可选扩展，各自独立目录，可整体删除，核心保持精简。
+- **UI 拔插（UiKit）**：UI 显示时挂入场景树、关闭时离树不销毁并按池化策略复用，停止绘制 / 布局 / 轮询 / 输入遍历；内置暂停请求聚合，UI 与暂停动作解耦。
 
 ---
 
@@ -32,7 +33,10 @@ framework/
 │   └── event.gd            # 事件基类（RefCounted）
 ├── kits/                   # 容器型扩展：extends Kit（可整体删除）
 │   ├── kit.gd              # 容器型基类（@abstract Kit extends Architecture）
-│   └── save/save_kit.gd    # SaveKit：版本化整体存档
+│   ├── save/save_kit.gd    # SaveKit：版本化整体存档
+│   └── ui/                 # UiKit：UI 拔插管理
+│       ├── ui_kit.gd       # 拔插 / 池化 / 挂载 / 暂停聚合
+│       └── ui_view.gd      # UiView 基类：生命周期钩子 + 架构桥
 └── libs/                   # 库型扩展：extends RefCounted，零耦合（可整体删除）
     └── fsm/fsm_lib.gd      # FSMLib：非分层状态机
 ```

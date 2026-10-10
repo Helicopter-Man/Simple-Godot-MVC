@@ -21,6 +21,7 @@
 
 - [Kit 基类](#kit-基类)
 - [SaveKit](#savekit)
+- [UiKit](#uikit)
 
 ---
 
@@ -179,3 +180,111 @@ func get_defaults() -> Dictionary:
 - 禁止 `..` 目录穿越（反斜杠会被规范化后再校验）。
 
 建议按槽位命名，例如 `user://saves/slot_1.save`。
+
+---
+
+## UiKit
+
+`class_name UiKit`，`extends Kit`。它是 **UI 拔插管理**的容器：持有 `ui_id → PackedScene` 注册表，按每个 UI 自述的池化策略复用实例。
+
+### 拔插与池化
+
+- **拔插**：`open()` 把 UI 挂入挂载点，`close()` 将其**移出场景树但不销毁**。离树会一次性停止该 UI 的绘制、布局重算、逐帧轮询与输入遍历。
+- **池化（opt-in，由 UI 自述）**：每个 `UiView` 用导出字段声明自己的策略：
+
+| 字段 | 含义 |
+|---|---|
+| `singular : bool` | 同一时刻是否只允许一个实例活动；重复 `open` 返回现有实例 |
+| `pool_initial : int` | 池初始大小：预实例化的空闲实例数（可由 `prewarm()` 触发） |
+| `pool_max : int` | 池上限：关闭后保留在池中的空闲实例数，超出立即释放；0 表示不保留 |
+
+`singular` 时池上限收敛为 1；`pool_initial` 会被 `pool_max` 截断。
+
+### 挂载点
+
+`@export var mount : CanvasLayer`：所有 UI 的父节点。留空时首次使用会自动创建一个 `CanvasLayer`（名为 `UiMount`）作为本 Kit 的子节点。分层与输入拦截**不**由本模块管理，直接用 Control 节点自身的设置（`mouse_filter`、焦点等）。
+
+### 与数据架构的桥
+
+`@export var target_architecture : Architecture`：UI 经事件总线访问的 Model/System 所属作用域；留空则回退为本 Kit 自身。`UiView` 提供：
+
+- `get_arch()` / `get_system()` / `get_model()` / `get_utility()`
+- `bind_event(name, callback)` / `send_event(event)`：**`bind_event` 会在 UI 离树时自动解绑**，避免池化复用累积重复回调
+
+### 暂停请求聚合
+
+UI 与暂停动作解耦。UI 通过 `set_pause_request(on)` 向内写入请求，外部通过 `is_pause_requested()` / `get_pause_requests()` 查询。UI 离树时其暂停请求被**自动清空**，隐藏中的 UI 不会永久按住暂停；是否真正暂停仍由外部逻辑决定。
+
+### UiView 契约
+
+子类继承 `UiView`（`extends Control`）并重写：
+
+| 钩子 | 时机 |
+|---|---|
+| `_ui_enter(params : Dictionary)` | 每次显示（首次与池中复用都会调用）；在此 `bind_event`、按 `params` 刷新 |
+| `_ui_exit()` | 每次隐藏 / 离树；在此重置界面自身的可变状态 |
+
+> 不要重写 `_ready` / `_exit_tree`：`_ready` 一生只触发一次（池化复用不会再触发），框架用 `_exit_tree` 兜底清理（自动解绑事件、清空暂停请求）。
+
+### 使用方式
+
+```gdscript
+extends UiKit
+class_name GameUiKit
+
+func _init_architecture() -> void:
+	register(&"PauseMenu", preload("res://ui/pause_menu.tscn"))
+	register(&"AchievementToast", preload("res://ui/achievement_toast.tscn"))
+	prewarm(&"AchievementToast")
+```
+
+```gdscript
+extends UiView
+class_name PauseMenu
+
+func _ui_enter(params : Dictionary) -> void:
+	bind_event(&"GamePausedEvent", _on_paused)
+	set_pause_request(true)     # 声明：菜单显示期间请求暂停
+
+func _ui_exit() -> void:
+	pass                        # 界面自身状态重置；事件由框架兜底解绑
+
+func _on_paused(event : GamePausedEvent) -> void:
+	pass
+```
+
+```gdscript
+var ui := $GameUiKit as UiKit
+ui.open(&"PauseMenu")
+get_tree().paused = ui.is_pause_requested()
+```
+
+### API
+
+| 方法 | 返回 | 说明 |
+|---|---|---|
+| `register(ui_id, scene)` | `Error` | 登记 `ui_id → PackedScene`，重名不覆盖 |
+| `unregister(ui_id)` | `Error` | 注销并释放该 id 的全部实例 |
+| `has_ui(ui_id)` / `get_registered_ids()` | `bool` / `Array[StringName]` | 查询注册表 |
+| `prewarm(ui_id)` | `Error` | 预实例化，填充到 `pool_initial` |
+| `try_open(ui_id, params := {})` | `Error` | 打开（可断言）；实例经 `get_last_opened()` 取 |
+| `open(ui_id, params := {})` | `UiView` | `try_open` 的便捷包装；失败返回 `null` |
+| `get_last_opened()` | `UiView` | 最近一次 `try_open` 打开的实例（已释放时返回 `null`） |
+| `close(view)` | `Error` | 关闭单个 |
+| `close_id(ui_id)` / `close_all()` | `int` | 关闭该 id 全部 / 全部，返回关闭数量 |
+| `is_open(ui_id)` | `bool` | 是否有活动实例 |
+| `get_active(ui_id)` / `get_all_active()` | `Array[UiView]` | 活动实例 |
+| `get_pool_size(ui_id)` / `is_pooled(view)` | `int` / `bool` | 池中空闲实例数量 / 某实例是否在池中 |
+| `set_pause_request(view, on)` | `void` | 向内入口（由 `UiView` 转发） |
+| `is_pause_requested()` / `get_pause_requests()` | `bool` / `Array[UiView]` | 向外查询 |
+| `get_mount()` / `get_target_architecture()` | `CanvasLayer` / `Architecture` | 取挂载点 / 目标架构 |
+
+错误码：
+
+| 返回 | 场景 |
+|---|---|
+| `OK` | 成功 |
+| `ERR_INVALID_PARAMETER` | `ui_id` 为空 / 场景为 `null` / `close` 传入非本 Kit 的实例 |
+| `ERR_ALREADY_EXISTS` | `ui_id` 重复注册 |
+| `ERR_DOES_NOT_EXIST` | `unregister` 未注册；`close` 的对象已关闭 |
+| `ERR_INVALID_DATA` | 场景根节点未挂 `UiView` 脚本（`open` 返回 `null`，`prewarm` 返回此码） |
