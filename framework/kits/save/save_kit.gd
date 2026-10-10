@@ -1,114 +1,57 @@
-extends Node
-## 存档套件：独立于 Architecture 的存档作用域容器
-## 仅承载实现了 get_data / set_data 接口的 saveable Model
-## 通过 ServiceConfig 暴露 saveable Model 与自身实例给其他 Architecture
+extends Kit
+## 容器型扩展模块：版本化整体存档
+## 承载实现了 get_data / set_data 接口的 Model；复用 Architecture 的总线、生命周期与服务暴露
 class_name SaveKit
 
 
-# ---- 服务配置（与 Architecture 对齐）----
-@export var service_config : ServiceConfig
-var _registered_services : Array[StringName] = []
-# NOTE 待按新核心重构：本节点 extends Node，暂自持一个私有总线以保证可编译
-var _registry : ServiceRegistry = ServiceRegistry.new()
-
-# ---- saveable Model 容器 ----
-var _saveable_models : Dictionary[StringName, Model] = {}
-
-# 生命周期：子类重写以注册自身的 saveable Model
+# ---- 生命周期：子类重写 _init_save_kit() 注册存档 Model ----
 func _init_save_kit() -> void:
 	pass
 
-func _ready() -> void:
+
+func _init_architecture() -> void:
 	_init_save_kit()
-	# 触发 saveable Model 的初始化钩子
-	for model : Model in _saveable_models.values():
-		if model.has_method("_on_init"):
-			model._on_init()
-	_register_services()
-
-func _exit_tree() -> void:
-	# NOTE 主动反初始化，避免悬挂服务与回调
-	_unregister_services()
-	for model : Model in _saveable_models.values():
-		if model.has_method("_on_deinit"):
-			model._on_deinit()
-	_saveable_models.clear()
 
 
-# ---- 服务声明 ----
-func _register_services() -> void:
-	if service_config == null:
-		return
-	# 暴露 SaveKit 自身
-	if service_config.self_name != &"":
-		if _registry.register(service_config.self_name, self) == OK:
-			_registered_services.append(service_config.self_name)
-	# 暴露 saveable Model
-	for model_name : StringName in service_config.models:
-		var model : Model = get_model(model_name)
-		if model != null:
-			if _registry.register(model_name, model) == OK:
-				_registered_services.append(model_name)
-		else:
-			push_warning("SaveKit|服务声明|Model %s 未注册，跳过" % model_name)
-	# NOTE SaveKit 不暴露 System / Utility，明确警告以避免配置错误
-	for system_name : StringName in service_config.systems:
-		push_warning("SaveKit|服务声明|SaveKit 不支持暴露 System，跳过 %s" % system_name)
-	for utility_name : StringName in service_config.utilities:
-		push_warning("SaveKit|服务声明|SaveKit 不支持暴露 Utility，跳过 %s" % utility_name)
-
-func _unregister_services() -> void:
-	for service_name : StringName in _registered_services:
-		_registry.unregister(service_name)
-	_registered_services.clear()
-
-# NOTE 查询服务：待重构为可注入的共享总线，当前只能查到本节点私有的总线
-func get_service(_name : StringName) -> Variant:
-	return _registry.get_service(_name)
-
-
-# ---- 注册 / 注销 / 获取 saveable Model ----
-func register_saveable(model : Model) -> void:
-	if not (model.has_method("get_data") and model.has_method("set_data")):
-		push_error("SaveKit|注册|Model %s 未实现 get_data/set_data 接口" % model.get_script_name())
-		return
-	var model_name = model.get_script_name()
-	if _saveable_models.has(model_name):
-		push_error("SaveKit|注册|Model %s 已经注册，请勿重复注册" % model_name)
-		return
-	_saveable_models[model_name] = model
-
-func unregister_saveable(model_name : StringName) -> void:
-	_saveable_models.erase(model_name)
-
-func get_model(model_name : StringName) -> Model:
-	return _saveable_models.get(model_name)
-
-func has_model(model_name : StringName) -> bool:
-	return _saveable_models.has(model_name)
-
-
-# ---- 路径安全校验 ----
-func _validate_path(path : String, action : String) -> bool:
+# ---- 路径安全校验（本模块内部）----
+func _validate_path(path : String) -> Error:
 	# 必须以 user:// 开头，防止误写工程目录或绝对路径
 	if not path.begins_with("user://"):
-		push_error("SaveKit|%s|路径非法，必须以 user:// 开头" % action)
-		return false
+		push_error("SaveKit|路径非法，必须以 user:// 开头: %s" % path)
+		return ERR_INVALID_PARAMETER
 	# 规范化分隔符，防止反斜杠绕过分段校验
-	var normalized := path.replace("\\", "/")
-	var parts := normalized.split("/")
-	for part in parts:
+	var normalized : String = path.replace("\\", "/")
+	for part in normalized.split("/"):
 		# 禁止 .. 穿越（如 user://../saves 会越界到工程根目录上层）
 		if part == "..":
-			push_error("SaveKit|%s|路径非法，禁止使用 .. 进行目录穿越" % action)
-			return false
-	return true
+			push_error("SaveKit|路径非法，禁止使用 .. 进行目录穿越: %s" % path)
+			return ERR_INVALID_PARAMETER
+	return OK
 
 
-# ---- 保存：将所有 saveable Model 的数据序列化为存档信封 ----
-func save(path : String) -> void:
-	if not _validate_path(path, "保存"):
-		return
+# ---- 注册 / 注销 ----
+## 注册一个可存档 Model（须实现 get_data / set_data）
+## ERR_INVALID_PARAMETER：实例为空或接口缺失；其余经 register_model 复用（含键校验、去重、生命周期）
+func register_saveable(model : Model) -> Error:
+	if model == null:
+		push_error("SaveKit|注册|Model 实例为 null")
+		return ERR_INVALID_PARAMETER
+	if not (model.has_method("get_data") and model.has_method("set_data")):
+		push_error("SaveKit|注册|Model %s 未实现 get_data/set_data 接口" % model.get_script_name())
+		return ERR_INVALID_PARAMETER
+	return register_model(model)
+
+
+func unregister_saveable(model_name : StringName) -> Error:
+	return unregister_model(model_name)
+
+
+# ---- 保存：将所有存档 Model 数据序列化为存档信封 ----
+## 路径非法返回 ERR_INVALID_PARAMETER；文件打开失败返回 ERR_CANT_OPEN；成功返回 OK
+func save(path : String) -> Error:
+	var err : Error = _validate_path(path)
+	if err != OK:
+		return err
 
 	# NOTE 信封结构：版本号 + 保存时间 + 各 Model 数据
 	var envelope : Dictionary = {
@@ -117,8 +60,11 @@ func save(path : String) -> void:
 		"models": {}
 	}
 
-	for model_name : StringName in _saveable_models:
-		var model : Model = _saveable_models[model_name]
+	for model_name : StringName in _model_dic:
+		var model : Model = _model_dic[model_name]
+		# NOTE 本模块只应注册可存档 Model；对经 register_model 混入的对象做防御性跳过
+		if not model.has_method("get_data"):
+			continue
 		# NOTE get_data 必须返回 Dictionary，否则跳过该 Model 并报错
 		var data = model.get_data()
 		if not data is Dictionary:
@@ -143,24 +89,26 @@ func save(path : String) -> void:
 	var file : FileAccess = FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
 		push_error("SaveKit|保存|文件打开失败: " + path)
-		return
+		return ERR_CANT_OPEN
 	file.store_buffer(bytes)
 	file.close()
+	return OK
 
 
 # ---- 读档：反序列化信封并执行版本迁移链 + 默认值填充 ----
-func load(path : String) -> void:
-	if not _validate_path(path, "读档"):
-		return
+## ERR_FILE_NOT_FOUND：文件不存在（预期失败，不写日志）；ERR_INVALID_DATA：信封格式非法
+func load(path : String) -> Error:
+	var err : Error = _validate_path(path)
+	if err != OK:
+		return err
 
 	if not FileAccess.file_exists(path):
-		push_warning("SaveKit|读档|文件不存在: " + path)
-		return
+		return ERR_FILE_NOT_FOUND
 
 	var file : FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		push_error("SaveKit|读档|文件打开失败: " + path)
-		return
+		return ERR_CANT_OPEN
 	var bytes : PackedByteArray = file.get_buffer(file.get_length())
 	file.close()
 
@@ -168,13 +116,15 @@ func load(path : String) -> void:
 
 	# 校验信封格式
 	if not _validate_envelope(envelope, "读档"):
-		return
+		return ERR_INVALID_DATA
 
 	var models_dict : Dictionary = envelope["models"]
 	for model_name in models_dict:
-		var model : Model = _saveable_models.get(StringName(model_name))
+		var model : Model = _model_dic.get(StringName(model_name))
 		if model == null:
 			push_warning("SaveKit|读档|Model %s 未注册，跳过" % model_name)
+			continue
+		if not model.has_method("set_data"):
 			continue
 
 		var entry = models_dict[model_name]
@@ -231,6 +181,8 @@ func load(path : String) -> void:
 		# 调用 set_data：错误隔离，单个 Model 失败不影响其他 Model
 		if not _safe_set_data(model, data, model_name):
 			continue
+
+	return OK
 
 
 # ---- 内部安全调用 ----
@@ -300,19 +252,16 @@ func _validate_entry(entry : Variant, model_name : StringName) -> bool:
 
 
 # ---- 辅助方法 ----
-# NOTE 判断指定路径的存档文件是否存在
+# NOTE 判断指定路径的存档文件是否存在（路径非法时返回 false）
 func has_save(path : String) -> bool:
-	if not _validate_path(path, "查询"):
-		return false
-	return FileAccess.file_exists(path)
+	return _validate_path(path) == OK and FileAccess.file_exists(path)
 
-# NOTE 获取存档元信息，不触发 set_data，适合在选档界面预览
+# NOTE 获取存档元信息，不触发 set_data，适合在选档界面预览；失败返回空字典
 func get_save_info(path : String) -> Dictionary:
-	if not _validate_path(path, "查询"):
+	if _validate_path(path) != OK:
 		return {}
 
 	if not FileAccess.file_exists(path):
-		push_warning("SaveKit|查询|文件不存在: " + path)
 		return {}
 
 	var file : FileAccess = FileAccess.open(path, FileAccess.READ)

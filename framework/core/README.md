@@ -2,7 +2,7 @@
 
 # 核心层 framework/core
 
-核心层不依赖任何 Kit。删除 `framework/kits/` 不影响本层使用。
+核心层不依赖任何扩展模块。删除 `framework/kits/` 或 `framework/libs/` 都不影响本层使用。
 
 ---
 
@@ -51,7 +51,7 @@ class_name GameArchitecture
 
 func _init_architecture() -> void:
 	# 顺序无强制要求，但建议 Utility → Model → System，便于阅读
-	register_utility(ResourceKit.new())
+	register_utility(MyUtility.new())   # 你的无状态工具，可选
 	register_model(PlayerModel.new())
 	register_system(CombatSystem.new())
 ```

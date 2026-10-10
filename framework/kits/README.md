@@ -1,133 +1,54 @@
 [← 返回总览](../../README.md)
 
-# 扩展 Kit framework/kits
+# 容器型模块 framework/kits
 
-Kit 是可选扩展，不参与核心架构。删除整个 `framework/kits/` 目录不影响 [核心层](../core/README.md) 的使用。
+容器型扩展是**自己管理状态、要暴露服务、要有起停**的模块。它继承 `Kit`（即 `Architecture`），因此天然获得作用域总线、服务暴露与生命周期闭环。删除整个 `framework/kits/` 目录不影响核心与其他扩展。
+
+---
+
+## 两类扩展一览
+
+| 形态 | 基类 | 类名后缀 | 目录 | 文档 |
+|---|---|---|---|---|
+| 容器型 | `extends Kit` | `Kit` | `framework/kits/` | 本文 |
+| 库型 | `extends RefCounted` | `Lib` | `framework/libs/` | [库型模块](../libs/README.md) |
+
+判定标准：*这个模块是否需要自己管理状态 / 服务 / 生命周期？* 是 → 容器型；否 → 库型。
 
 ---
 
 ## 目录
 
-- [Kit 定位](#kit-定位)
-- [FSM](#fsm)
-- [ResourceKit](#resourcekit)
+- [Kit 基类](#kit-基类)
 - [SaveKit](#savekit)
-- [与核心层的关系](#与核心层的关系)
 
 ---
 
-## Kit 定位
-
-| Kit | 基类 | 类型 |
-|---|---|---|
-| `fsm_kit.gd` | `RefCounted` | 通用状态机，与核心层无耦合 |
-| `resource_kit.gd` | `Utility` | 单个 Resource 的存取工具 |
-| `save_kit.gd` | `Node` | 多 Model 的版本化整体存档容器 |
-
-Kit 之间互不依赖，可按需引入。
-
----
-
-## FSM
-
-一个简洁的**非分层**状态机。`class_name FSM`，`extends RefCounted`，不依赖核心层任何类。
-
-### 组成
-
-- `FSMState`：内部抽象类（`@abstract class FSMState extends RefCounted`），需实现 `enter()` / `update(delta)` / `exit()`。
-- `FSM`：状态机本体，用 `StringName` 索引状态。
-
-### API
-
-| 方法 | 说明 |
-|---|---|
-| `FSM.new(enums : Array[StringName])` | 用允许的状态名列表构造；空列表会 `push_error` |
-| `add_state(state : FSMState)` | 添加状态；状态名必须已在构造列表中，且不可重复添加 |
-| `start()` | 启动；所有状态都已填充才会成功 |
-| `stop()` | 停止 |
-| `change_state(name : StringName)` | 切换状态（仅激活状态可用） |
-| `update(delta : float)` | 更新当前状态 |
-| `clear()` | 停止并清空状态列表 |
-
-### 状态定义约定
-
-`FSMState._init(_name : StringName, fsm : Object)` 需要传入归属的 FSM 实例。构造时会校验：
-
-- `fsm` 必须是有效对象；
-- `fsm` 必须带 `ISFSM` 元数据（`FSM` 在构造时 `set_meta`），否则拒绝。
-
-状态内部通过 `WeakRef` 持有状态机，避免循环引用；切换状态调用 `_change_state(name)`。
+## Kit 基类
 
 ```gdscript
-extends FSM.FSMState
-class_name PlayerIdleState
-
-func _init(fsm : Object) -> void:
-	super._init(&"Idle", fsm)
-
-func enter() -> void:
-	print("进入待机")
-
-func update(delta : float) -> void:
-	if Input.is_action_just_pressed("move_right"):
-		_change_state(&"Run")
-
-func exit() -> void:
-	print("退出待机")
+@abstract
+extends Architecture
+class_name Kit
 ```
 
-```gdscript
-# 在某个 System 内
-var _fsm : FSM
+- **语义标记**：`node is Kit` 可判定「这是一个容器型模块」。
+- **继承即免费获得**（来自 `Architecture`）：生命周期闭环与 `deinit` 幂等、服务总线、`service_config` 服务暴露、`Model / System / Utility` 注册与查询、事件总线。
+- **当前刻意留空**：容器模块的通用操作等实际出现需求时再提炼，避免凭空抽象。
 
-func _on_init() -> void:
-	_fsm = FSM.new([&"Idle", &"Run", &"Jump"])
-	_fsm.add_state(PlayerIdleState.new(_fsm))
-	_fsm.add_state(PlayerRunState.new(_fsm))
-	_fsm.add_state(PlayerJumpState.new(_fsm))
-	_fsm.start()
-
-func on_process(delta : float) -> void:
-	_fsm.update(delta)
-
-func _on_deinit() -> void:
-	_fsm.clear()
-```
-
-`FSM.update()` 只在主动调用时推进，因此既可用于逐帧驱动，也可只做事件驱动的状态切换。
-
----
-
-## ResourceKit
-
-继承 `Utility` 的资源存取工具，用于保存单个 `Resource`。
-
-| 方法 | 说明 |
-|---|---|
-| `resource_save(resource : Resource, save_path : String) -> void` | 保存到指定路径 |
-| `resource_load(save_path : String) -> Resource` | 读取并**深拷贝**返回；文件不存在时返回 `null` |
-
-约束：
-
-- 路径必须以 `user://` 开头，否则 `push_error` 并拒绝。
-- 文件名必须以 `.tres` 结尾，否则 `push_error` 并拒绝。
-- 保存前会自动创建所需目录；读取时若目录不存在也会先创建再返回 `null`。
-- 返回的是 `duplicate(true)` 的结果，修改它不会影响磁盘文件。
-
-```gdscript
-var rk := get_utility(&"ResourceKit") as ResourceKit
-rk.resource_save(player_model, "user://save/player.tres")
-
-var loaded := rk.resource_load("user://save/player.tres") as PlayerModel
-if loaded != null:
-	player_model.hp = loaded.hp
-```
+写容器型模块时继承 `Kit` 并重写 `_init_architecture()`（或按具体模块约定），在其中注册本模块的组件。
 
 ---
 
 ## SaveKit
 
-`class_name SaveKit`，**`extends Node`**（不是 `Architecture`）。它是独立于业务架构的存档作用域容器，只承载实现了存档接口的 Model，避免存档域与业务域互相耦合。
+`class_name SaveKit`，`extends Kit`。它是**版本化整体存档**的容器：承载实现了存档接口的 Model，把它们统一序列化到一个存档文件，并支持版本迁移与默认值填充。
+
+因为继承自 `Kit`/`Architecture`，SaveKit：
+
+- 复用核心的注册与去重（`register_model`）；
+- 复用 `service_config`，可把存档 Model 暴露到共享总线，被其他 Architecture 查到；
+- 复用生命周期：`_ready()` 自动初始化并调用各 Model 的 `_on_init()`，`_exit_tree()` 自动 `deinit()`。
 
 ### 使用方式
 
@@ -146,9 +67,11 @@ func _init_save_kit() -> void:
 
 ```
 GameRoot (Node)
-├── MainArchitecture  (service_config: MainServiceConfig.tres)
-└── SaveKit           (service_config: SaveServiceConfig.tres)
+├── MainArchitecture  (service_config: MainServiceConfig.tres, shared_registry: hub.tres)
+└── SaveKit           (service_config: SaveServiceConfig.tres,  shared_registry: hub.tres)
 ```
+
+给它和业务 Architecture 赋**同一个** `shared_registry`，存档 Model 即可被业务侧经总线查到。
 
 ### saveable Model 契约
 
@@ -160,7 +83,7 @@ GameRoot (Node)
 | `migrate(data : Dictionary, from_version : int) -> Dictionary` | 否 | 版本迁移钩子，逐版本向上迁移 |
 | `get_defaults() -> Dictionary` | 否 | 默认值字典，用于补齐老存档缺失的字段 |
 
-注册时会用 `has_method()` 校验 `get_data` / `set_data` 是否存在，缺失则 `push_error` 并拒绝。注册键取 `Model.get_script_name()`，因此 saveable Model 需要 `class_name`。
+注册时会用 `has_method()` 校验 `get_data` / `set_data` 是否存在，缺失则 `push_error` 并返回 `ERR_INVALID_PARAMETER`。注册键取 `Model.get_script_name()`，因此 saveable Model 需要 `class_name`。
 
 ```gdscript
 extends Model
@@ -191,17 +114,27 @@ func get_defaults() -> Dictionary:
 
 ### API
 
-| 方法 | 说明 |
+| 方法 | 返回 | 说明 |
+|---|---|---|
+| `register_saveable(model : Model)` | `Error` | 注册存档 Model（校验接口后复用 `register_model`） |
+| `unregister_saveable(model_name : StringName)` | `Error` | 注销 |
+| `save(path : String)` | `Error` | 写出存档 |
+| `load(path : String)` | `Error` | 读入存档并写回各 Model |
+| `has_save(path : String)` | `bool` | 判断存档文件是否存在 |
+| `get_save_info(path : String)` | `Dictionary` | 读取元信息，不触发 `set_data`，适合选档界面预览 |
+
+`get_model(name)` / `has_model(name)` 等查询方法由 `Architecture` 提供。
+
+错误码：
+
+| 返回 | 场景 |
 |---|---|
-| `register_saveable(model : Model) -> void` | 注册存档 Model |
-| `unregister_saveable(model_name : StringName) -> void` | 注销 |
-| `get_model(model_name : StringName) -> Model` | 查询 |
-| `has_model(model_name : StringName) -> bool` | 判断是否已注册 |
-| `save(path : String) -> void` | 写出存档 |
-| `load(path : String) -> void` | 读入存档并写回各 Model |
-| `has_save(path : String) -> bool` | 判断存档文件是否存在 |
-| `get_save_info(path : String) -> Dictionary` | 读取元信息，不触发 `set_data`，适合选档界面预览 |
-| `get_service(service_name : StringName) -> Variant` | 查询本节点总线上的服务 |
+| `OK` | 成功 |
+| `ERR_INVALID_PARAMETER` | 路径非法；`register_saveable` 传入 `null` 或接口缺失 |
+| `ERR_ALREADY_EXISTS` | 同名 Model 重复注册（由 `register_model` 返回） |
+| `ERR_FILE_NOT_FOUND` | `load` 时存档文件不存在（预期失败，不写日志） |
+| `ERR_CANT_OPEN` | 文件打开失败 |
+| `ERR_INVALID_DATA` | 存档信封格式非法 |
 
 ### 存档信封
 
@@ -209,14 +142,14 @@ func get_defaults() -> Dictionary:
 
 ```gdscript
 {
-    "save_version": 1,                     # 信封格式版本
-    "saved_at": "2026-07-11 12:34:56",     # 系统本地时间
-    "models": {
-        "PlayerSaveModel": {
-            "version": 2,                  # 该 Model 的数据版本
-            "data": { ... }                # get_data() 的返回内容
-        },
-    },
+	"save_version": 1,                     # 信封格式版本
+	"saved_at": "2026-07-11 12:34:56",     # 系统本地时间
+	"models": {
+		"PlayerSaveModel": {
+			"version": 2,                  # 该 Model 的数据版本
+			"data": { ... }                # get_data() 的返回内容
+		},
+	},
 }
 ```
 
@@ -240,26 +173,9 @@ func get_defaults() -> Dictionary:
 
 ### 路径安全
 
-`save` / `load` / `has_save` / `get_save_info` 都强制：
+`save` / `load` / `has_save` / `get_save_info` 都经模块内部的 `_validate_path()` 强制：
 
 - 路径必须以 `user://` 开头；
 - 禁止 `..` 目录穿越（反斜杠会被规范化后再校验）。
 
 建议按槽位命名，例如 `user://saves/slot_1.save`。
-
----
-
-## 与核心层的关系
-
-- `FSM` 与核心层完全解耦，可独立使用。
-- `ResourceKit` 是 `Utility` 子类，注册进 Architecture 后通过 `get_utility(&"ResourceKit")` 取用。
-- `SaveKit` 有自己独立的节点生命周期与存档 Model 容器，不复用 `Architecture` 的组件注册。
-
-### SaveKit 的当前状态
-
-核心层已把服务总线由全局静态表改为可实例化的 `ServiceRegistry`（详见[核心层文档](../core/README.md)）。`SaveKit` 本轮只做了**保证可编译的最小适配**：它自持一个**私有** `ServiceRegistry`，因此：
-
-- 它的 `_ready()` / `_exit_tree()` / `register_saveable()` / `save()` / `load()` 行为与之前一致；
-- 但它在总线上暴露的服务目前**无法被其他 Architecture 查询到**（没有共享同一实例的途径）。
-
-`SaveKit` 尚未按新的可注入总线模型重构。在重构完成前，如果需要在业务 System 中访问存档 Model，请直接持有 `SaveKit` 节点引用，而不要依赖 `get_service()` 跨域查询。
