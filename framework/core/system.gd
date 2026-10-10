@@ -27,15 +27,16 @@ func get_model(model_name : StringName) -> Model:
 func get_utility(utility_name : StringName) -> Utility:
 	return _architecture.get_utility(utility_name)
 
-# 事件：委托给所属 Architecture
-func register_event(event_name : StringName, callback: Callable) -> void:
-	_architecture.register_event(event_name, callback)
+# 事件：委托给所属 Architecture，错误码原样透传
+func register_event(event_name : StringName, callback: Callable) -> Error:
+	return _architecture.register_event(event_name, callback)
 
-func unregister_event(event_name : StringName, callback: Callable) -> void:
-	_architecture.unregister_event(event_name, callback)
+func unregister_event(event_name : StringName, callback: Callable) -> Error:
+	return _architecture.unregister_event(event_name, callback)
 
-func send_event(event : Event) -> void:
-	_architecture.send_event(event)
+# NOTE 返回实际执行的回调数量
+func send_event(event : Event) -> int:
+	return _architecture.send_event(event)
 
 # NOTE 逐帧更新改为 opt-in：子类按需定义 func on_process(delta) / func on_physics_process(delta)
 # 定义了对应方法的 System 才会被 Architecture 纳入 _process / _physics_process 轮询

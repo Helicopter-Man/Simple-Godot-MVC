@@ -8,6 +8,8 @@ class_name SaveKit
 # ---- 服务配置（与 Architecture 对齐）----
 @export var service_config : ServiceConfig
 var _registered_services : Array[StringName] = []
+# NOTE 待按新核心重构：本节点 extends Node，暂自持一个私有总线以保证可编译
+var _registry : ServiceRegistry = ServiceRegistry.new()
 
 # ---- saveable Model 容器 ----
 var _saveable_models : Dictionary[StringName, Model] = {}
@@ -39,14 +41,14 @@ func _register_services() -> void:
 		return
 	# 暴露 SaveKit 自身
 	if service_config.self_name != &"":
-		ServiceMiddleware.register_service(service_config.self_name, self)
-		_registered_services.append(service_config.self_name)
+		if _registry.register(service_config.self_name, self) == OK:
+			_registered_services.append(service_config.self_name)
 	# 暴露 saveable Model
 	for model_name : StringName in service_config.models:
 		var model : Model = get_model(model_name)
 		if model != null:
-			ServiceMiddleware.register_service(model_name, model)
-			_registered_services.append(model_name)
+			if _registry.register(model_name, model) == OK:
+				_registered_services.append(model_name)
 		else:
 			push_warning("SaveKit|服务声明|Model %s 未注册，跳过" % model_name)
 	# NOTE SaveKit 不暴露 System / Utility，明确警告以避免配置错误
@@ -57,12 +59,12 @@ func _register_services() -> void:
 
 func _unregister_services() -> void:
 	for service_name : StringName in _registered_services:
-		ServiceMiddleware.unregister_service(service_name)
+		_registry.unregister(service_name)
 	_registered_services.clear()
 
-# NOTE 查询其他 Architecture 暴露的服务
+# NOTE 查询服务：待重构为可注入的共享总线，当前只能查到本节点私有的总线
 func get_service(_name : StringName) -> Variant:
-	return ServiceMiddleware.get_service(_name)
+	return _registry.get_service(_name)
 
 
 # ---- 注册 / 注销 / 获取 saveable Model ----

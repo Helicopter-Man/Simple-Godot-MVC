@@ -21,12 +21,13 @@ func _on_deinit() -> void:
 func get_utility(utility_name : StringName) -> Utility:
 	return _architecture.get_utility(utility_name)
 
-# 事件：委托给所属 Architecture
-func register_event(event_name : StringName, callback: Callable) -> void:
-	_architecture.register_event(event_name, callback)
+# 事件：委托给所属 Architecture，错误码原样透传
+func register_event(event_name : StringName, callback: Callable) -> Error:
+	return _architecture.register_event(event_name, callback)
 
-func unregister_event(event_name : StringName, callback: Callable) -> void:
-	_architecture.unregister_event(event_name, callback)
+func unregister_event(event_name : StringName, callback: Callable) -> Error:
+	return _architecture.unregister_event(event_name, callback)
 
-func send_event(event : Event) -> void:
-	_architecture.send_event(event)
+# NOTE 返回实际执行的回调数量
+func send_event(event : Event) -> int:
+	return _architecture.send_event(event)
