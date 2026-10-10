@@ -1,3 +1,7 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Test artifacts
+/tests/_report.json
+/tests/_run.log
