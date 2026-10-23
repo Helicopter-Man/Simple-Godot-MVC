@@ -11,6 +11,7 @@
 ## 目录
 
 - [FSMLib](#fsmlib)
+- [DialogueLib](#dialoguelib)
 
 ---
 
@@ -92,3 +93,35 @@ func _on_deinit() -> void:
 ```
 
 `update()` 只在主动调用时推进，因此既可用于逐帧驱动，也可只做事件驱动的状态切换。
+
+---
+
+## DialogueLib
+
+`framework/libs/dialogue/`：把 `.dk` 对话剧本编译成纯数据 program，再按帧推进，每次返回「下一帧的默认编排形式」。详见 [dialogue/README.md](./dialogue/README.md)。
+
+`class_name DialogueLib`，`extends RefCounted`，不依赖核心层任何类。
+
+```gdscript
+var program := DialogueLib.compile(source, "tavern.dk")
+if program.has_errors():
+	for d in program.diagnostics:
+		print(d)
+
+var lib := DialogueLib.new()
+var step := lib.begin(program)
+while not step.is_ended():
+	for op in step.ops:
+		play(op)              # 调用方解释 bg / sprite / audio
+	if step.has_choices():
+		step = lib.choose(step.choices[0].id)
+	else:
+		step = lib.advance()  # 连点、跳过、自动播放都由调用方决定何时调用
+```
+
+两条设计边界：
+
+- **不发事件、不碰节点**：产物是 `DialogueStep`（纯数据），如何呈现、何时推进由显示层决定；
+- **不认识 op 语义**：`<<bg ...>>` 只被解析成 `{op, args}`，翻译成演出指令是项目侧的事。
+
+因此它不能做成 `Kit`：对话需要宿主的事件总线，做成容器会把自己关进独立作用域，外部系统收不到剧情进展。

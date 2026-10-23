@@ -38,7 +38,8 @@ framework/
 │       ├── ui_kit.gd       # 拔插 / 池化 / 挂载 / 暂停聚合
 │       └── ui_view.gd      # UiView 基类：生命周期钩子 + 架构桥
 └── libs/                   # 库型扩展：extends RefCounted，零耦合（可整体删除）
-    └── fsm/fsm_lib.gd      # FSMLib：非分层状态机
+    ├── fsm/fsm_lib.gd      # FSMLib：非分层状态机
+    └── dialogue/           # DialogueLib：.dk 剧本编译与推进（纯数据返回）
 ```
 
 ## 安装
