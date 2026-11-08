@@ -16,6 +16,7 @@
 - **按需 tick**：System 只有定义了 `on_process` / `on_physics_process` 才会被纳入轮询；没有轮询对象时自动关闭 `_process` / `_physics_process`。
 - **扩展二分类**：容器型（`Kit`）与库型（`Lib`）两类可选扩展，各自独立目录，可整体删除，核心保持精简。
 - **UI 拔插（UiKit）**：UI 显示时挂入场景树、关闭时离树不销毁并按池化策略复用，停止绘制 / 布局 / 轮询 / 输入遍历；内置暂停请求聚合，UI 与暂停动作解耦。
+- **原生音频引擎（AudioKit）**：事件驱动，业务只发 `cue_id` 不碰播放器；资源组引用计数、随机/序列/洗牌容器、优先级与 voice 抢占、State/Switch/RTPC、总线快照与 ducking、2D/3D 发声体与监听者、交互音乐分层与交叉淡变、诊断快照。无 Autoload、无第三方中间件。
 
 ---
 
@@ -34,9 +35,14 @@ framework/
 ├── kits/                   # 容器型扩展：extends Kit（可整体删除）
 │   ├── kit.gd              # 容器型基类（@abstract Kit extends Architecture）
 │   ├── save/save_kit.gd    # SaveKit：版本化整体存档
-│   └── ui/                 # UiKit：UI 拔插管理
-│       ├── ui_kit.gd       # 拔插 / 池化 / 挂载 / 暂停聚合
-│       └── ui_view.gd      # UiView 基类：生命周期钩子 + 架构桥
+│   ├── ui/                 # UiKit：UI 拔插管理
+│   │   ├── ui_kit.gd       # 拔插 / 池化 / 挂载 / 暂停聚合
+│   │   └── ui_view.gd      # UiView 基类：生命周期钩子 + 架构桥
+│   └── audio/              # AudioKit：Godot 原生音频引擎
+│       ├── audio_kit.gd    # 门面 / 生命周期 / 事件转发
+│       ├── audio_cue.gd    # 事件定义、audio_bank_def.gd、audio_handle.gd …
+│       ├── systems/        # Bank / Event / Voice / MixMusic 四个 System
+│       └── events/         # 播放与状态回调事件
 └── libs/                   # 库型扩展：extends RefCounted，零耦合（可整体删除）
     ├── fsm/fsm_lib.gd      # FSMLib：非分层状态机
     └── dialogue/           # DialogueLib：.dk 剧本编译与推进（纯数据返回）
@@ -137,7 +143,7 @@ func _ready() -> void:
 | 文档 | 内容 |
 |---|---|
 | [核心层文档](./framework/core/README.md) | Architecture / ServiceRegistry / ServiceConfig / Model / System / Utility / Event，生命周期、错误码约定、注册键规则、分层依赖、API 速查 |
-| [容器型模块](./framework/kits/README.md) | `Kit` 基类与 `SaveKit`（版本化整体存档） |
+| [容器型模块](./framework/kits/README.md) | `Kit` 基类、`SaveKit`、`UiKit`、`AudioKit`（原生音频引擎） |
 | [库型模块](./framework/libs/README.md) | `FSMLib`（非分层状态机） |
 
 ## 许可证

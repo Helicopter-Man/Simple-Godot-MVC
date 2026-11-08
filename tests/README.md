@@ -1,6 +1,6 @@
 # 测试规范 framework tests
 
-本目录是框架的自动化测试。**此前没有测试规范**，本文件即第一版约定；`SaveKit` 是首个被测模块（36 个用例），`UiKit` 为第二个（49 个用例），均全绿。
+本目录是框架的自动化测试。**此前没有测试规范**，本文件即第一版约定；现有 `SaveKit`（36）、`UiKit`（49）、`DialogueLib`（57）、`AudioKit`（129）四个套件，共 271 个用例，均全绿。
 
 测试不依赖任何第三方测试框架，只用 Godot 自带的 GDScript + headless 运行。
 
@@ -14,15 +14,19 @@ tests/
 ├── run_tests.gd         # 入口：汇总所有套件、打印报告、设置退出码
 ├── save_kit_test.gd     # SaveKit 测试套件
 ├── ui_kit_test.gd       # UiKit 测试套件
+├── dialogue_lib_test.gd # DialogueLib 测试套件
+├── audio_kit_test.gd    # AudioKit 测试套件（129 用例）
 ├── _report.json         # 运行时产物（勿提交）
-└── fixtures/            # 测试夹具（Model / Kit 子类等）
+└── fixtures/            # 测试夹具（Model / Kit / Architecture 子类等）
 	├── test_save_model.gd
 	├── plain_test_model.gd
 	├── versioned_test_model.gd
 	├── lifecycle_test_model.gd
 	├── test_save_kit.gd
 	├── test_ui_view.gd
-	└── test_ui_event.gd
+	├── test_ui_event.gd
+	├── audio_test_probe.gd
+	└── test_audio_arch.gd
 ```
 
 ---
@@ -104,6 +108,7 @@ _check(cases, "重复注册返回 ERR_ALREADY_EXISTS", kit.register_saveable(dup
 
 - 需要作为**注册键**的 Model 必须有 `class_name`（注册键取自 `Model.get_script_name()`）。
 - 测试脚本里用 `preload("res://tests/fixtures/xxx.gd")` 引用夹具，避免依赖全局类缓存的新鲜度。
+- `audio_test_probe.gd` 收集音频回调事件；`test_audio_arch.gd` 作为 `target_architecture` 验证事件跨作用域转发。AudioKit 套件用 `silent = true`，不产生真实声音，也不依赖音频设备。
 
 ---
 

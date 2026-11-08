@@ -22,6 +22,7 @@
 - [Kit 基类](#kit-基类)
 - [SaveKit](#savekit)
 - [UiKit](#uikit)
+- [AudioKit](#audiokit)
 
 ---
 
@@ -288,3 +289,169 @@ get_tree().paused = ui.is_pause_requested()
 | `ERR_ALREADY_EXISTS` | `ui_id` 重复注册 |
 | `ERR_DOES_NOT_EXIST` | `unregister` 未注册；`close` 的对象已关闭 |
 | `ERR_INVALID_DATA` | 场景根节点未挂 `UiView` 脚本（`open` 返回 `null`，`prewarm` 返回此码） |
+
+---
+
+## AudioKit
+
+`class_name AudioKit`，`extends Kit`。**Godot 原生音频引擎**：把业界主流中间件那套「事件驱动 + 资源组 + 状态参数 + 混音 + voice 预算 + 交互音乐」的工作流落进框架的 Model / System / Utility 分层，不依赖任何中间件，也不用 Autoload。
+
+设计取向：业务代码只发**语义事件**（`cue_id`），永不接触 `AudioStreamPlayer`；播放、池化、抢占、位置跟随、淡变全部由 Kit 收口。
+
+### 能力对照
+
+| 业界概念 | AudioKit |
+|---|---|
+| Event / PlayingID | `post(cue_id)` → `AudioHandle` |
+| SoundBank / LoadBank | `AudioBankDef` + `load_bank` / `unload_bank`（引用计数） |
+| Random / Sequence Container | `AudioCue.container`：SINGLE / RANDOM / SEQUENCE / SHUFFLE |
+| Priority / Voice Limit / Virtualization | `max_voices` + `priority` + `max_instances` + `min_interval` + 抢占 |
+| State / Switch | `set_state` / `set_switch`；Cue 可按 Switch 门控 |
+| Game Parameter / RTPC | `set_rtpc` + `AudioRtpcBinding`（Curve → 总线音量 / voice 音量 / 音高） |
+| Bus / Mix Snapshot / Ducking | `set_bus_volume` / `apply_snapshot` / `duck` |
+| Game Object / Listener | `AudioEmitter` 桥 / `set_listener` |
+| Interactive Music | `set_music_state` + 组交叉淡变 + 纵向分层 `set_music_layer` |
+| Suspend / Resume | `set_paused` |
+| Event Callback / Profiler | `AudioPlaybackEvent` / `AudioStateEvent` / `AudioDiagnostic` |
+
+### 目录与分层
+
+```
+framework/kits/audio/
+├── audio_kit.gd             # Kit 门面：生命周期、配置、对外 API、事件转发
+├── audio_cue.gd             # Cue：流 / 容器 / 优先级 / 空间 / 淡变
+├── audio_bank_def.gd        # Bank：一组 Cue + auto_load
+├── audio_handle.gd          # 句柄（PlayingID 风格，弱引用 Kit）
+├── audio_rtpc_binding.gd    # 参数 → 目标属性映射（Curve）
+├── audio_diagnostic.gd      # 纯数据诊断快照
+├── audio_emitter.gd         # 发声体桥（extends Node，离树自动解绑）
+├── audio_state_model.gd     # Model：Bank / Cue / 状态 / 参数 / 统计
+├── audio_selector.gd        # Utility：取流、抢占、曲线、dB 换算（纯算法）
+├── systems/
+│   ├── audio_bank_system.gd      # 资源组引用计数
+│   ├── audio_event_system.gd     # post 门控与回调
+│   ├── audio_voice_system.gd     # player 池 / 淡变 / 3D 跟随 / 回收
+│   └── audio_mix_music_system.gd # 总线 / 状态 / 音乐分层
+└── events/
+    ├── audio_playback_event.gd   # started / ended / dropped
+    └── audio_state_event.gd      # bank / state / switch / rtpc / music
+```
+
+组件在 `_init_architecture()` 中注册：`AudioStateModel`（Model）+ `AudioSelector`（Utility）+ 4 个 System。`AudioVoiceSystem` 与 `AudioMixMusicSystem` 定义 `on_process`，由核心的按需 tick 驱动；配置应用延后到 `_ready()` 末尾的 `_bootstrap()`，保证 player 池已建好。
+
+### 接入
+
+```
+GameRoot (Node)
+├── MainArchitecture  (service_config: MainServiceConfig.tres, shared_registry: hub.tres)
+└── AudioKit          (service_config: AudioServiceConfig.tres, shared_registry: hub.tres)
+```
+
+给 `service_config.self_name = &"AudioKit"`，业务侧用 `arch.get_service(&"AudioKit")` 取用。**事件总线按 Architecture 隔离**：音频回调默认只在 AudioKit 作用域内派发；需要业务侧收到时，把 `target_architecture` 指向业务 Architecture（与 `UiKit.target_architecture` 同一手法），Kit 会转发两类回调事件并带防循环标志。
+
+`@export` 配置：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `target_architecture` | 空 | 回调事件转发目标 |
+| `max_voices` | 32 | 全局同时发声上限 |
+| `silent` | `false` | 不调用 `play()`，用逻辑时长推进；headless / 无声设备可确定性断言 |
+| `default_bus` | `&"Master"` | Cue 总线不存在时回退 |
+| `banks` / `rtpc_bindings` / `music_states` | 空 | 声明式资源组 / 参数绑定 / 音乐状态表 |
+| `listener` | 空 | `AudioListener2D/3D` 或 Camera |
+
+也可继承 AudioKit 重写 `_init_audio_kit()` 用代码注册。**必须挂入场景树**，`_ready` 才会注册组件。
+
+### 使用
+
+```gdscript
+# 1. 资源（建议编辑器建 .tres；示例为代码构造）
+var cue := AudioCue.new()
+cue.cue_id = &"Play_Footstep"
+cue.streams = [preload("res://audio/step_01.wav"), preload("res://audio/step_02.wav")]
+cue.container = AudioCue.ContainerMode.SHUFFLE
+cue.bus = &"SFX"
+cue.priority = 40
+cue.max_instances = 3
+cue.volume_jitter_db = 2.0
+cue.spatial = AudioCue.SpatialMode.POSITIONAL_3D
+
+var bank := AudioBankDef.new()
+bank.bank_id = &"Bank_Common"
+bank.cues = [cue]
+bank.auto_load = true
+# 填入 AudioKit 的 banks，或在 _init_audio_kit() 中 register_bank(bank)
+```
+
+```gdscript
+# 2. 业务 System 内：只发语义事件
+var audio := get_architecture().get_service(&"AudioKit") as AudioKit
+var h := audio.post(&"Play_Footstep", emitter_id, {"volume_db": -3.0})
+if h != null:
+	h.set_pitch(1.1)
+
+audio.set_state(&"Music", &"Combat")
+audio.set_rtpc(&"Intensity", 0.8)
+audio.set_music_state(&"Combat")
+audio.apply_snapshot({&"Music": 0.6, &"SFX": 1.0}, 0.4)
+audio.duck(&"Music", 0.4, 0.6)   # 语音 / 过场时压低音乐
+```
+
+```gdscript
+# 3. 3D 发声体：挂到角色节点下并绑定，位置由 Kit 的 tick 自动跟随
+var emitter := AudioEmitter.new()
+add_child(emitter)
+audio.attach_emitter(emitter)
+audio.post(&"Play_Footstep", emitter)   # 也可直接传实例，自动绑定
+# 节点离树时自动解绑并停掉自己的 voice
+```
+
+### Cue 关键字段
+
+| 字段 | 说明 |
+|---|---|
+| `streams` / `weights` | 变体流 / RANDOM 权重 |
+| `container` | SINGLE / RANDOM / SEQUENCE / SHUFFLE |
+| `spatial` / `max_distance` / `attenuation` / `unit_size` | 非空间 / 2D / 3D 与衰减 |
+| `priority` / `max_instances` / `min_interval` | 抢占、实例上限、触发节流 |
+| `volume_db` / `volume_jitter_db` / `pitch` / `pitch_jitter` | 音量与音高随机化 |
+| `fade_in` / `fade_out` / `duration_hint` | 淡变、silent 模式逻辑时长 |
+| `switch_group` / `switch_value` | Switch 门控 |
+| `bus` | 目标总线（不存在则回退 `default_bus`） |
+
+### API
+
+| 分类 | 方法 |
+|---|---|
+| 资源组 | `register_bank` / `load_bank` / `unload_bank(id, force)` / `is_bank_registered` / `is_bank_loaded` / `get_bank_refcount` / `get_registered_banks` / `has_cue` |
+| 事件 | `try_post(cue_id, emitter_id, params) -> Error` / `post(...) -> AudioHandle` / `get_last_handle` / `stop_voice` / `stop_cue` / `stop_all` / `is_voice_active` |
+| 句柄 | `AudioHandle.stop(fade)` / `is_playing()` / `set_volume_db` / `set_pitch` |
+| 状态参数 | `set_state` / `get_state` / `set_switch` / `get_switch` / `set_rtpc` / `get_rtpc` / `bind_rtpc` |
+| 混音 | `set_bus_volume` / `get_bus_volume` / `apply_snapshot` / `duck` |
+| 音乐 | `register_music_state` / `set_music_state` / `get_music_state` / `play_music` / `stop_music` / `set_music_layer` / `get_music_cue_id` |
+| 发声体 / 监听者 | `attach_emitter` / `detach_emitter` / `get_emitter_count` / `set_listener` / `get_listener` / `clear_listener` |
+| 全局 | `set_paused` / `is_paused` |
+| 诊断 | `get_diagnostics() -> AudioDiagnostic` / `get_snapshot() -> Dictionary` / `tick(delta)`（仅测试用） |
+
+错误码（沿用核心约定，预期失败只返码不写日志）：
+
+| 返回 | 场景 |
+|---|---|
+| `OK` | 成功 |
+| `ERR_INVALID_PARAMETER` | 空 id / null 实例 / 非法 Cue / 非法监听者 |
+| `ERR_ALREADY_EXISTS` | Bank 或 Cue 重名、音乐状态重复 |
+| `ERR_DOES_NOT_EXIST` | 未注册的 Bank / Cue / voice / 音乐层 / 总线；未加载时卸载 |
+| `ERR_BUSY` | 触发节流、实例上限、voice 上限且优先级不足、Switch 不匹配 |
+| `ERR_UNAVAILABLE` | 组件未就绪 / 已 deinit / 监听者未进树 |
+| `ERR_INVALID_DATA` | Cue 无可用流 |
+| `ERR_CANT_CREATE` | voice 创建失败 |
+
+### 生命周期与测试
+
+`deinit()` 重写为「先 `stop_all(0)` + `stop_music(0)`，再 `super.deinit()`」；各 System 的 `_on_deinit` 释放 player 池与音乐节点、解绑所有 emitter。`AudioEmitter._exit_tree` 自动解绑，池化角色不会产生悬挂 id。
+
+`silent=true` 时不调用 `play()`，voice 由 `cue.duration_hint`（或 `stream.get_length()`）在 `tick` 中推进并回收，`started` / `ended` 事件照常派发——headless 测试可断言完整生命周期。`tests/audio_kit_test.gd` 覆盖 Bank 引用计数、节流、抢占、RTPC、混音、音乐、Emitter、事件转发与 deinit 幂等。
+
+### 边界
+
+原生实现**不**提供：可视化 authoring 工具、实时 mix profiler、SoundBank 打包、Room/Portal 几何声学、平台级编解码优化；RTPC 通过每帧插值逼近，不是采样级精确。本模块对齐的是**调用语义与工作流**，不是功能等价——这些缺口属于音频中间件范畴，框架刻意不引入。
