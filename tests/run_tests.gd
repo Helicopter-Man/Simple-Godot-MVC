@@ -15,6 +15,7 @@ const SUITES : Array = [
 	preload("res://tests/ui_kit_test.gd"),
 	preload("res://tests/dialogue_lib_test.gd"),
 	preload("res://tests/audio_kit_test.gd"),
+	preload("res://tests/localization_kit_test.gd"),
 ]
 
 

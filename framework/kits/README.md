@@ -15,6 +15,8 @@
 
 判定标准：*这个模块是否需要自己管理状态 / 服务 / 生命周期？* 是 → 容器型；否 → 库型。
 
+当前容器型模块：`SaveKit`（版本化存档）、`UiKit`（UI 拔插）、`AudioKit`（原生音频）、`LocalizationKit`（本地化查表）。
+
 ---
 
 ## 目录
@@ -23,6 +25,7 @@
 - [SaveKit](#savekit)
 - [UiKit](#uikit)
 - [AudioKit](#audiokit)
+- [LocalizationKit](#localizationkit)
 
 ---
 
@@ -333,8 +336,8 @@ framework/kits/audio/
 │   ├── audio_voice_system.gd     # player 池 / 淡变 / 3D 跟随 / 回收
 │   └── audio_mix_music_system.gd # 总线 / 状态 / 音乐分层
 └── events/
-    ├── audio_playback_event.gd   # started / ended / dropped
-    └── audio_state_event.gd      # bank / state / switch / rtpc / music
+	├── audio_playback_event.gd   # started / ended / dropped
+	└── audio_state_event.gd      # bank / state / switch / rtpc / music
 ```
 
 组件在 `_init_architecture()` 中注册：`AudioStateModel`（Model）+ `AudioSelector`（Utility）+ 4 个 System。`AudioVoiceSystem` 与 `AudioMixMusicSystem` 定义 `on_process`，由核心的按需 tick 驱动；配置应用延后到 `_ready()` 末尾的 `_bootstrap()`，保证 player 池已建好。
@@ -455,3 +458,77 @@ audio.post(&"Play_Footstep", emitter)   # 也可直接传实例，自动绑定
 ### 边界
 
 原生实现**不**提供：可视化 authoring 工具、实时 mix profiler、SoundBank 打包、Room/Portal 几何声学、平台级编解码优化；RTPC 通过每帧插值逼近，不是采样级精确。本模块对齐的是**调用语义与工作流**，不是功能等价——这些缺口属于音频中间件范畴，框架刻意不引入。
+
+---
+
+## LocalizationKit
+
+`class_name LocalizationKit`，`extends Kit`。**作用域化本地化查表**：自持翻译表实例，按 `locale → 回退链 → key 本身` 解析文本，locale 切换经 `LocaleChangedEvent` 通知，可接入 UI 刷新与存档。
+
+不依赖全局 `TranslationServer`，不调用 `tr()`；不自写 CSV / PO 解析器，直接消费 Godot 导入的 `.translation` 或代码构造的 `Translation`。
+
+### 形态与分层
+
+```
+framework/kits/localization/
+├── localization_kit.gd            # Kit 门面：注册 / locale / 查表 / 格式化 / 事件转发
+├── locale_model.gd                # Model：locale / 翻译表 / 回退链 / 缺失计数
+├── events/
+│   └── locale_changed_event.gd    # LocaleChangedEvent：old_locale / new_locale
+└── README.md
+```
+
+**一个 Model + Kit 门面，不设 System**：本地化没有逐帧逻辑，查表与格式化都是同步方法。依赖方向 `localization → core`，与其他 kit / lib 零依赖。
+
+### 接入
+
+```
+GameRoot (Node)
+├── MainArchitecture   (service_config: MainServiceConfig.tres,  shared_registry: hub.tres)
+├── LocalizationKit    (service_config: LocServiceConfig.tres,   shared_registry: hub.tres,
+│                       target_architecture: MainArchitecture)
+├── UiKit              (target_architecture: MainArchitecture)
+└── SaveKit            (shared_registry: hub.tres)
+```
+
+给 `service_config.self_name = &"LocalizationKit"`，业务侧 `arch.get_service(&"LocalizationKit")` 取用。locale 切换在本 Kit 作用域派发 `LocaleChangedEvent`；需要业务作用域收到时，把 `target_architecture` 指向业务 Architecture（与 AudioKit 同一转发手法，带防循环标志）。
+
+### 配置
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `default_locale` | `&"en"` | 进树时自动尝试应用；未注册对应翻译表仅 warning |
+| `fallback_locales` | 空 | 回退顺序，严格按声明顺序尝试 |
+| `translations` | 空 | 声明式翻译表（编辑器导入的 `.translation`） |
+| `target_architecture` | 空 | `LocaleChangedEvent` 转发目标 |
+
+也可继承 LocalizationKit 重写 `_init_localization_kit()` 用代码注册。`_bootstrap()` 顺序：声明式注册 → 子类钩子 → `try_set_locale(default_locale)`，因此两种注册方式都能让默认 locale 生效。
+
+### API
+
+| 分类 | 方法 |
+|---|---|
+| 注册 | `register_translation(translation) -> Error` / `unregister_translation(locale) -> Error` |
+| locale | `try_set_locale(locale) -> Error` / `get_locale() -> StringName` |
+| 查表 | `translate(key, args := {}) -> String` / `has_key(key) -> bool` / `get_missing_total() -> int` |
+
+- 缺失 key 返回 key 本身，并累计 `missing_total`；空译文视为缺失。
+- 已注册 locale 严格相等匹配，不做语言前缀推导。
+- 切换到相同 locale 返回 `OK` 且不发事件。
+- 注销当前 locale 时保留 locale 设置，查表走回退链。
+- 占位符 `{name}` 用 `str(args[name])` 替换；多余 args 忽略，缺值占位符原样保留。
+
+### 业务接入
+
+```gdscript
+var loc := arch.get_service(&"LocalizationKit") as LocalizationKit
+var title := loc.translate(&"ui.title")
+var greet := loc.translate(&"ui.greet", {"name": "Ada"})
+```
+
+- **UI**：UiView 在 `_ui_enter` 里 `bind_event(&"LocaleChangedEvent", ...)` 刷新文本；离树自动解绑。
+- **对话**：DialogueLib 保持原文，调用方用 `DialogueStep.line_id` 另行 `translate()`。
+- **存档**：LocalizationKit 不认识 SaveKit；项目侧存档 Model 在 `get_data()` 写 `get_locale()`、`set_data()` 读回后 `try_set_locale()`，失败回落默认值。
+
+完整 API、错误码与示例见 [模块文档](./localization/README.md)。`tests/localization_kit_test.gd`（53 用例）覆盖注册、locale 幂等、回退链、格式化、事件转发与生命周期。
+
